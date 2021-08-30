@@ -1,31 +1,17 @@
-#![allow(dead_code)]
-
 use core::fmt;
 use lazy_static::lazy_static;
 use spin::Mutex;
 use volatile::Volatile;
 
 lazy_static! {
-    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer::new());
-}
-
-// Macros ----------------------------------
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*)));
-}
-
-#[macro_export]
-macro_rules! println {
-    () => ($crate::print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
-}
-
-#[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
-    use core::fmt::Write;
-    use x86_64::instructions::interrupts;
-    interrupts::without_interrupts(|| WRITER.lock().write_fmt(args).unwrap())
+    /// A global `Writer` instance that can be used for printing to the VGA text buffer.
+    ///
+    /// Used by the `print!` and `println!` macros.
+    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
+        column_position: 0,
+        color_code: ColorCode::new(Color::Yellow, Color::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,30 +66,7 @@ pub struct Writer {
     buffer: &'static mut Buffer,
 }
 
-impl fmt::Write for Writer {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.write_string(s);
-        Ok(())
-    }
-}
-
 impl Writer {
-    pub fn new() -> Writer {
-        Writer {
-            column_position: 0,
-            color_code: ColorCode::new(Color::Yellow, Color::Black),
-            buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
-        }
-    }
-
-    pub fn with_color(background: Color, foreground: Color) -> Writer {
-        Writer {
-            column_position: 0,
-            color_code: ColorCode::new(background, foreground),
-            buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
-        }
-    }
-
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
@@ -155,32 +118,56 @@ impl Writer {
         }
     }
 }
-
-mod test {
-    #[test_case]
-    fn test_println_simple() {
-        println!("test_println_simple output",);
+impl fmt::Write for Writer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.write_string(s);
+        Ok(())
     }
-    #[test_case]
-    fn test_println_many() {
-        for i in 0..200 {
-            println!("test_println_many {}", i);
+}
+
+// Macros ----------------------------------
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments) {
+    use core::fmt::Write;
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().write_fmt(args).unwrap();
+    });
+}
+
+#[test_case]
+fn test_println_simple() {
+    println!("test_println_simple output",);
+}
+#[test_case]
+fn test_println_many() {
+    for i in 0..200 {
+        println!("test_println_many {}", i);
+    }
+}
+#[test_case]
+fn test_println_output() {
+    use core::fmt::Write;
+    use x86_64::instructions::interrupts;
+
+    let s = "a test string that fits on one line";
+    interrupts::without_interrupts(|| {
+        let mut writer = WRITER.lock();
+        writeln!(writer, "\n{}", s).expect("Failed to write");
+        for (i, c) in s.chars().enumerate() {
+            let screen_char = writer.buffer.chars[BUFFER_HEIGHT - 2][i].read();
+            assert_eq!(char::from(screen_char.character), c);
         }
-    }
-    #[test_case]
-    fn test_println_output() {
-        use super::*;
-        use core::fmt::Write;
-        use x86_64::instructions::interrupts;
-
-        let s = "a test string that fits on one line";
-        interrupts::without_interrupts(|| {
-            let mut writer = WRITER.lock();
-            writeln!(writer, "\n{}", s).expect("Failed to write");
-            for (i, c) in s.chars().enumerate() {
-                let screen_char = WRITER.lock().buffer.chars[BUFFER_HEIGHT - 2][i].read();
-                assert_eq!(char::from(screen_char.character), c);
-            }
-        });
-    }
+    });
 }

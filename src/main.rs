@@ -11,18 +11,32 @@ extern crate alloc;
 
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
+use ross::task::executor::Executor;
+use ross::task::keyboard;
+use ross::task::{simple_executor::SimpleExecutor, Task};
 use ross::{init, println};
 
 entry_point!(kernel_main);
 
+async fn async_number() -> u32 {
+    40
+}
+
+async fn example_task() {
+    let number = async_number().await;
+    println!("async number: {}", number);
+}
+
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
     init(boot_info);
 
+    let mut exectutor = Executor::new();
+    exectutor.spawn(Task::new(example_task()));
+    exectutor.spawn(Task::new(keyboard::print_keypresses()));
+    exectutor.run();
+
     #[cfg(test)]
     test_main();
-
-    println!("did not crash",);
-    ross::hlt_loop();
 }
 
 #[cfg(not(test))]
